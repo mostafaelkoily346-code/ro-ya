@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>قلب النجوم</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Pacifico&display=swap" rel="stylesheet">
+<style>
+:root{box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+html,body{height:100%;margin:0;background:#000;overflow:hidden}
+canvas{position:fixed;inset:0;width:100%;height:100%;display:block;touch-action:none;cursor:pointer}
+.hint{position:fixed;left:0;right:0;bottom:calc(env(safe-area-inset-bottom,0px) + 22px);text-align:center;color:#ff8cc8;font:300 15px/1 system-ui,"Segoe UI",Tahoma,sans-serif;letter-spacing:.04em;opacity:0;pointer-events:none;animation:hint 9s ease 4.5s forwards}
+@keyframes hint{0%{opacity:0}15%,75%{opacity:.7}100%{opacity:0}}
+@media (prefers-reduced-motion:reduce){.hint{animation:none}}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(()=>{
+'use strict';
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const RM=matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TAU=Math.PI*2,rnd=Math.random;
+const clamp=(v,a,b)=>v<a?a:v>b?b:v;
+const ease=x=>x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2;
+const gauss=()=>(rnd()+rnd()+rnd()+rnd()-2)/2;
+const F=n=>new Float32Array(n);
+
+let W=0,H=0,dpr=1,U=10,CX=0,CY=0,PY=0,PRX=0,PRY=0,T=0,kick=0,tilt=0;
+function resize(){
+  dpr=Math.min(window.devicePixelRatio||1,2);
+  W=window.innerWidth;H=window.innerHeight;
+  cv.width=Math.round(W*dpr);cv.height=Math.round(H*dpr);
+  U=Math.min(W*.8/32,H*.5/29.5);        // heart is 32 x 29.5 model units
+  CX=W/2;CY=H*.42;
+  PY=CY+14.75*U+U*3.4;
+  PRX=Math.min(15*U,W*.46);PRY=PRX*.2;
+}
+resize();
+window.addEventListener('resize',resize);
+window.addEventListener('orientationchange',resize);
+
+/* ---------- glow sprites (one per blue shade) ---------- */
+const PAL=[[255,40,140],[255,70,170],[255,105,190],[255,140,210],[255,185,230],[255,230,245]];
+const WT=[.16,.24,.26,.18,.10,.06];
+function pickCol(){let r=rnd(),i=0;while(i<5&&(r-=WT[i])>0)i++;return i;}
+const SP=PAL.map(c=>{
+  const s=64,k=document.createElement('canvas');k.width=k.height=s;
+  const g=k.getContext('2d'),gr=g.createRadialGradient(32,32,0,32,32,32);
+  const m=c.map(v=>Math.round(v+(255-v)*.6)).join(','),b=c.join(',');
+  gr.addColorStop(0,`rgba(${m},1)`);gr.addColorStop(.1,`rgba(${m},.95)`);
+  gr.addColorStop(.28,`rgba(${b},.5)`);gr.addColorStop(.6,`rgba(${b},.1)`);gr.addColorStop(1,`rgba(${b},0)`);
+  g.fillStyle=gr;g.fillRect(0,0,s,s);return k;
+});
+function dot(ci,x,y,s,a){
+  ctx.globalAlpha=a>1?1:(a<0?0:a);
+  ctx.drawImage(SP[ci],x-s/2,y-s/2,s,s);
+}
+
+/* ---------- counts ---------- */
+const small=W*H<520000;
+const N=small?2800:4300, SN=small?80:130, EN=small?42:70, DN=small?90:150, RN=small?260:440, BN=small?160:260;
+let activeN=N;
+
+/* ---------- heart particles (parametric heart equation) ---------- */
+const X=F(N),Y=F(N),Z=F(N),VX=F(N),VY=F(N),VZ=F(N),TX=F(N),TY=F(N),TZ=F(N),
+      DL=F(N),SZ=F(N),BR=F(N),PH=F(N),FA=F(N),FB=F(N),FC=F(N),TW=F(N),SX=F(N),SY=F(N),CI=new Uint8Array(N);
+for(let i=0;i<N;i++){
+  const t=rnd()*TAU,r=rnd();let s,br;
+  if(r<.30){s=1+gauss()*.012;br=.85+rnd()*.15;}            // crisp outline
+  else if(r<.42){s=.9+gauss()*.012;br=.7+rnd()*.2;}        // inner rim
+  else{s=Math.sqrt(rnd())*.96;br=.28+.4*rnd()+.25*s;}      // filled body
+  const hx=16*Math.pow(Math.sin(t),3);
+  const hy=13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t);
+  TX[i]=hx*s;TY[i]=hy*s+2.25;
+  TZ[i]=(rnd()*2-1)*(1.2+5.5*(1-s*s));
+  X[i]=(rnd()-.5)*(W/U)*1.25;Y[i]=(rnd()-.5)*(H/U)*1.25;Z[i]=(rnd()-.5)*40;
+  DL[i]=rnd()*2.2;BR[i]=br;PH[i]=rnd()*TAU;
+  FA[i]=.5+rnd()*.9;FB[i]=.5+rnd()*.9;FC[i]=.4+rnd()*.8;TW[i]=.8+rnd()*2.4;
+  SZ[i]=rnd()<.07?1.7+rnd():.5+rnd()*.8;                   // few large, many tiny
+  CI[i]=pickCol();
+}
+
+/* ---------- target sets: heart and the name "Rodina" ---------- */
+const HX=TX.slice(),HY=TY.slice(),HZ=TZ.slice(),HB=BR.slice();
+const NX=F(N),NY=F(N),NZ=F(N),NBR=F(N);
+let showName=false,textReady=false,nb=0;
+function setTargets(name){
+  for(let i=0;i<N;i++){
+    TX[i]=name?NX[i]:HX[i];TY[i]=name?NY[i]:HY[i];TZ[i]=name?NZ[i]:HZ[i];BR[i]=name?NBR[i]:HB[i];
+  }
+  showName=name;
+}
+let built=false;
+function buildName(){
+  if(built)return;built=true;
+  const txt='RO’YA',fs=220,c=document.createElement('canvas'),x=c.getContext('2d');
+  const font=fs+'px Pacifico,"Brush Script MT","Segoe Script",cursive';
+  x.font=font;
+  const w=Math.ceil(x.measureText(txt).width)+40,h=Math.ceil(fs*1.7);
+  c.width=w;c.height=h;x.font=font;x.fillStyle='#fff';x.textBaseline='alphabetic';
+  x.fillText(txt,20,fs*1.15);
+  const d=x.getImageData(0,0,w,h).data,pts=[];
+  let x0=1e9,x1=-1e9,y0=1e9,y1=-1e9;
+  for(let yy=0;yy<h;yy+=2)for(let xx=0;xx<w;xx+=2){
+    if(d[(yy*w+xx)*4+3]>128){pts.push(xx,yy);if(xx<x0)x0=xx;if(xx>x1)x1=xx;if(yy<y0)y0=yy;if(yy>y1)y1=yy;}
+  }
+  if(pts.length<400)return;
+  const sc=31/(x1-x0),cx=(x0+x1)/2,cy=(y0+y1)/2,m=pts.length/2;
+  for(let i=0;i<N;i++){
+    const q=((rnd()*m)|0)*2;
+    NX[i]=(pts[q]-cx+gauss()*1.1)*sc;NY[i]=-(pts[q+1]-cy+gauss()*1.1)*sc;
+    NZ[i]=(rnd()*2-1)*.7;NBR[i]=.65+.35*rnd();
+  }
+  textReady=true;
+}
+if(document.fonts&&document.fonts.load)document.fonts.load('220px Pacifico','RO’YA').then(buildName,buildName);
+setTimeout(buildName,4000);
+
+/* ---------- sparks: leave the heart and return ---------- */
+const sI=new Uint16Array(SN),sU=F(SN),sV=F(SN),sD=F(SN),sW=F(SN),sZ=F(SN),sS=F(SN),sC=new Uint8Array(SN);
+function respawnSpark(k,first){
+  sI[k]=(rnd()*N)|0;sU[k]=first?-rnd()*3:-rnd()*1.2;sV[k]=1/(1.6+rnd()*2);
+  sD[k]=3+rnd()*8;sW[k]=(rnd()-.5)*3;sZ[k]=(rnd()-.5)*10;sS[k]=1.2+rnd()*1.4;sC[k]=3+((rnd()*3)|0);
+}
+for(let k=0;k<SN;k++)respawnSpark(k,true);
+
+/* ---------- falling embers ---------- */
+const eX=F(EN),eY=F(EN),eVX=F(EN),eVY=F(EN),eL=F(EN),eM=F(EN),eS=F(EN),eP=F(EN);
+
+/* ---------- ambient dust ---------- */
+const dX=F(DN),dY=F(DN),dZ=F(DN),dV=F(DN),dP=F(DN);
+for(let k=0;k<DN;k++){
+  dX[k]=clamp(CX+gauss()*W*.35,0,W);dY[k]=rnd()*H;dZ[k]=.4+rnd();
+  dV[k]=(rnd()<.5?-1:1)*(5+rnd()*14);dP[k]=rnd()*TAU;
+}
+
+/* ---------- platform particles ---------- */
+const rR=F(RN),rT=F(RN),rO=F(RN),rP=F(RN),rRate=F(RN),rH=F(RN),rSz=F(RN),rRise=new Uint8Array(RN);
+for(let k=0;k<RN;k++){
+  rR[k]=rnd()<.45?.92+gauss()*.06:rnd()*1.1;rT[k]=rnd()*TAU;
+  rO[k]=(.1+.3*rnd())/(.35+rR[k]);rP[k]=rnd()*TAU;rRate[k]=.25+rnd()*.4;
+  rH[k]=(18+rnd()*80)*(U/10);rSz[k]=.5+rnd()*1.1;rRise[k]=rnd()<.45?1:0;
+}
+
+/* ---------- burst particles + ripples ---------- */
+const bX=F(BN),bY=F(BN),bVX=F(BN),bVY=F(BN),bL=F(BN),bM=F(BN),bS=F(BN);
+const ripples=[];
+
+/* ---------- pointer / touch ---------- */
+const P={x:-999,y:-999,on:false};
+function hit(x,y){const dx=(x-CX)/(17*U),dy=(y-CY)/(16*U);return dx*dx+dy*dy<1.1;}
+function burst(){
+  kick=1;ripples.push(T);
+  const bn=(activeN*.28)|0;
+  for(let n=0;n<bn;n++){
+    const i=(rnd()*activeN)|0,l=Math.hypot(X[i],Y[i])+.01,sp=14+rnd()*34;
+    VX[i]+=X[i]/l*sp+(rnd()-.5)*8;VY[i]+=Y[i]/l*sp+(rnd()-.5)*8;VZ[i]+=(rnd()-.5)*40;
+  }
+  for(let k=0;k<BN;k++){
+    const i=(rnd()*activeN)|0,x=SX[i],y=SY[i];
+    const a=Math.atan2(y-CY,x-CX)+(rnd()-.5)*1.2,sp=(140+rnd()*360)*(U/10);
+    bX[k]=x;bY[k]=y;bVX[k]=Math.cos(a)*sp;bVY[k]=Math.sin(a)*sp;
+    bL[k]=0;bM[k]=.9+rnd()*.9;bS[k]=1+rnd()*1.6;
+  }
+}
+cv.addEventListener('pointermove',e=>{P.x=e.clientX;P.y=e.clientY;P.on=true;});
+cv.addEventListener('pointerdown',e=>{P.x=e.clientX;P.y=e.clientY;P.on=true;if(hit(e.clientX,e.clientY))burst();});
+cv.addEventListener('pointerup',e=>{if(e.pointerType!=='mouse')P.on=false;});
+cv.addEventListener('pointercancel',()=>{P.on=false;});
+cv.addEventListener('pointerleave',()=>{P.on=false;});
+
+/* ---------- heartbeat ---------- */
+function beatAt(t){
+  const ph=(t%1.25)/1.25;
+  return Math.max(Math.exp(-Math.pow((ph-.07)/.055,2)),.62*Math.exp(-Math.pow((ph-.27)/.06,2)));
+}
+
+/* ---------- platform ---------- */
+function platform(g){
+  const a0=Math.min(.85,.4*g);
+  ctx.save();ctx.translate(CX,PY);ctx.scale(1,PRY/PRX);
+  const R=PRX*1.6,gr=ctx.createRadialGradient(0,0,0,0,0,R);
+  gr.addColorStop(0,`rgba(255,150,210,${a0})`);gr.addColorStop(.3,`rgba(255,60,160,${a0*.5})`);
+  gr.addColorStop(.65,`rgba(220,30,120,${a0*.15})`);gr.addColorStop(1,'rgba(190,10,100,0)');
+  ctx.globalAlpha=1;ctx.fillStyle=gr;ctx.beginPath();ctx.arc(0,0,R,0,TAU);ctx.fill();
+  ctx.restore();
+  const lg=ctx.createLinearGradient(0,PY,0,CY);
+  lg.addColorStop(0,`rgba(255,90,180,${Math.min(.3,.13*g)})`);lg.addColorStop(1,'rgba(255,90,180,0)');
+  ctx.fillStyle=lg;ctx.beginPath();
+  ctx.moveTo(CX-PRX*.72,PY);ctx.lineTo(CX+PRX*.72,PY);ctx.lineTo(CX+PRX*.2,CY);ctx.lineTo(CX-PRX*.2,CY);
+  ctx.closePath();ctx.fill();
+  for(const [m,al] of [[1,.95],[.7,.5],[.42,.3]]){
+    for(const [w,wa] of [[10,.05],[4,.13],[1.3,.8]]){
+      ctx.strokeStyle=`rgba(255,140,205,${Math.min(1,wa*al*(.75+.25*g))})`;
+      ctx.lineWidth=w;ctx.beginPath();ctx.ellipse(CX,PY,PRX*m,PRY*m,0,0,TAU);ctx.stroke();
+    }
+  }
+}
+
+/* ---------- main loop ---------- */
+let t0=0,last=0,ema=.016,fc=0,tiltT=0;
+function frame(ts){
+  requestAnimationFrame(frame);
+  if(!t0){t0=ts;last=ts;}
+  const raw=Math.min((ts-last)/1000,.1);last=ts;
+  const dt=Math.min(raw,.033);
+  T=(ts-t0)/1000+(RM?6:0);
+  ema=ema*.95+raw*.05;
+  if(++fc%90===0&&ema>.026&&activeN>N*.45)activeN=Math.floor(activeN*.86);
+
+  kick*=Math.exp(-2.5*dt);
+  const bm=ease(clamp((T-3.8)/1.6,0,1));
+  let mix=0;
+  if(T>5.5){
+    const tt=(T-5.5)%28;   // heart 8s | scramble | name 6s | scramble | heart
+    mix=tt<8?0:tt<11?ease((tt-8)/3):tt<12?1:tt<15?1-ease((tt-12)/3):tt<21?0:tt<24?ease((tt-21)/3):tt<25?1:1-ease((tt-25)/3);
+    const wantName=tt>=11.5&&tt<24.5;
+    if(wantName!==showName&&(textReady||!wantName))setTargets(wantName);
+  }
+  nb+=((showName?1:0)-nb)*Math.min(1,dt*1.5);
+  const beat=beatAt(T)*bm*(1-.6*mix)*(1-.55*nb);
+  const S=1+.065*beat+.05*kick+.008*Math.sin(T*.9);
+  const g=1+.95*beat+1.2*kick;
+  tiltT=P.on?(P.x/W-.5):0;tilt+=(tiltT-tilt)*Math.min(1,dt*3);
+  const ang=Math.sin(T*.42)*(RM?.15:.5-.3*nb)+tilt*.55,cA=Math.cos(ang),sA=Math.sin(ang);
+  const FOV=70,sc=U*S,bob=Math.sin(T*.8)*.25*U;
+  const R=Math.max(70,7*U),R2=R*R,pon=P.on;
+
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.globalCompositeOperation='source-over';ctx.globalAlpha=1;
+  ctx.fillStyle='#000';ctx.fillRect(0,0,W,H);
+  ctx.globalCompositeOperation='lighter';
+
+  /* haze + platform */
+  const hz=ctx.createRadialGradient(CX,CY,0,CX,CY,U*22);
+  hz.addColorStop(0,`rgba(255,50,150,${Math.min(.35,.14*g)})`);
+  hz.addColorStop(.5,`rgba(220,30,120,${Math.min(.2,.06*g)})`);
+  hz.addColorStop(1,'rgba(200,0,100,0)');
+  ctx.fillStyle=hz;ctx.fillRect(0,0,W,H);
+  platform(g);
+
+  /* dust */
+  for(let k=0;k<DN;k++){
+    dY[k]+=dV[k]*dt*dZ[k];dX[k]+=Math.sin(T*.4+dP[k])*6*dt;
+    if(dY[k]<-10){dY[k]=H+10;dX[k]=clamp(CX+gauss()*W*.35,0,W);}
+    else if(dY[k]>H+10){dY[k]=-10;dX[k]=clamp(CX+gauss()*W*.35,0,W);}
+    const tw=.6+.4*Math.sin(T*1.3+dP[k]*3);
+    dot(1+(k%4),dX[k],dY[k],(.5+.8*dZ[k])*5,(.1+.18*dZ[k])*tw);
+  }
+
+  /* platform particles */
+  for(let k=0;k<RN;k++){
+    rT[k]+=rO[k]*dt;
+    const sn=Math.sin(rT[k]),x=CX+Math.cos(rT[k])*rR[k]*PRX,yb=PY+sn*rR[k]*PRY,near=.75+.25*sn;
+    let y,a;
+    if(rRise[k]){const fr=(T*rRate[k]+rP[k])%1;y=yb-fr*rH[k];a=Math.sin(fr*Math.PI)*.9;}
+    else{y=yb-(.5+.5*Math.sin(T*1.1+rP[k]))*3;a=.55+.4*Math.sin(T*2+rP[k]);}
+    dot(2+(k%4),x,y,rSz[k]*8*near,a*(.6+.4*g)*near);
+  }
+
+  /* heart */
+  for(let i=0;i<activeN;i++){
+    const f=ease(clamp((T-DL[i])/2.6,0,1));
+    const k=(.1+5.4*f)*(1-.96*mix),dm=1-(2.2+1.3*f)*dt;
+    const x=X[i],y=Y[i],z=Z[i];
+    let ax=(TX[i]+Math.sin(T*FA[i]+PH[i])*.22-x)*k;
+    let ay=(TY[i]+Math.cos(T*FB[i]+PH[i]*1.7)*.22-y)*k;
+    let az=(TZ[i]+Math.sin(T*FC[i]+PH[i]*2.3)*.4-z)*k;
+    const sw=(1-f)*.25+mix*.3;
+    if(sw>0){ax-=y*sw;ay+=x*sw;}
+    if(mix>0){ax+=Math.sin(y*.35+T*.9+PH[i])*mix*9;ay+=Math.cos(x*.35+T*.7+PH[i]*1.3)*mix*9;az+=Math.sin(x*.2+T+PH[i])*mix*3;}
+    const xr=x*cA+z*sA,zr=z*cA-x*sA,pf=FOV/(FOV-zr);
+    const sx=CX+xr*sc*pf,sy=CY-y*sc*pf+bob;
+    SX[i]=sx;SY[i]=sy;
+    if(pon){
+      const dx=sx-P.x,dy=sy-P.y,d2=dx*dx+dy*dy;
+      if(d2<R2&&d2>1){const d=Math.sqrt(d2),q=1-d/R,fo=36*q*q;ax+=dx/d*fo;ay-=dy/d*fo;az+=fo*.3;}
+    }
+    const vx=(VX[i]+ax*dt)*dm,vy=(VY[i]+ay*dt)*dm,vz=(VZ[i]+az*dt)*dm;
+    VX[i]=vx;VY[i]=vy;VZ[i]=vz;X[i]=x+vx*dt;Y[i]=y+vy*dt;Z[i]=z+vz*dt;
+    const tw=.72+.28*Math.sin(T*TW[i]+PH[i]*3);
+    const dA=.55+.45*clamp((zr+7)/14,0,1);
+    const a=BR[i]*tw*dA*(.3+.7*f)*(.85+.4*beat+.5*kick);
+    dot(CI[i],sx,sy,SZ[i]*9*pf*(.85+.22*beat+.2*kick),a);
+  }
+
+  /* sparks */
+  for(let k=0;k<SN;k++){
+    let u=sU[k]+dt*sV[k];
+    if(u>=1){respawnSpark(k,false);continue;}
+    sU[k]=u;
+    if(u<0||T<4.5)continue;
+    const i=sI[k],bx=TX[i],by=TY[i],bz=TZ[i],l=Math.hypot(bx,by)+.01;
+    const e=Math.sin(u*Math.PI),nx=bx/l,ny=by/l,d=sD[k]*e,w=sW[k]*Math.sin(u*TAU);
+    const x=bx+nx*d-ny*w,y=by+ny*d+nx*w,z=bz+sZ[k]*e;
+    const xr=x*cA+z*sA,zr=z*cA-x*sA,pf=FOV/(FOV-zr);
+    dot(sC[k],CX+xr*sc*pf,CY-y*sc*pf+bob,sS[k]*9*pf*(.6+.6*e),Math.pow(e,.8)*.95);
+  }
+
+  /* falling embers */
+  for(let k=0;k<EN;k++){
+    if(eM[k]===0){
+      if(T>4.2&&rnd()<dt*.9){
+        const i=(rnd()*activeN)|0;
+        eX[k]=SX[i];eY[k]=SY[i];eVX[k]=gauss()*6;eVY[k]=6+rnd()*14;
+        eL[k]=0;eM[k]=3+rnd()*3.5;eS[k]=1+rnd();eP[k]=rnd()*TAU;
+      }
+      continue;
+    }
+    eL[k]+=dt;eVY[k]+=8*dt;
+    eX[k]+=(eVX[k]+Math.sin(T*1.3+eP[k])*8)*dt;eY[k]+=eVY[k]*dt;
+    if(eL[k]>=eM[k]||eY[k]>PY){eM[k]=0;continue;}
+    const u=eL[k]/eM[k];
+    dot(2+(k%3),eX[k],eY[k],eS[k]*8,Math.sin(u*Math.PI)*.85);
+  }
+
+  /* burst particles */
+  const drag=Math.exp(-2.2*dt);
+  for(let k=0;k<BN;k++){
+    if(bM[k]===0)continue;
+    bL[k]+=dt;
+    if(bL[k]>=bM[k]){bM[k]=0;continue;}
+    bVX[k]*=drag;bVY[k]*=drag;bX[k]+=bVX[k]*dt;bY[k]+=bVY[k]*dt;
+    const u=bL[k]/bM[k];
+    dot(3+(k%3),bX[k],bY[k],bS[k]*9*(1-.4*u),(1-u)*.95);
+  }
+
+  /* ripples */
+  ctx.globalAlpha=1;
+  for(let j=ripples.length-1;j>=0;j--){
+    const u=(T-ripples[j])/1.2;
+    if(u>=1){ripples.splice(j,1);continue;}
+    const e=1-Math.pow(1-u,3),a=(1-u)*.5;
+    ctx.strokeStyle=`rgba(255,150,210,${a})`;ctx.lineWidth=1.5+4*(1-u);
+    ctx.beginPath();ctx.arc(CX,CY+bob,U*(4+22*e),0,TAU);ctx.stroke();
+  }
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
